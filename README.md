@@ -19,8 +19,6 @@ Instead of taxing the arbitrage, the hook runs it itself, inside the same transa
 1. **`beforeSwap`** — prices the swap against a Chainlink reference. A swap that pushes the pool price away from the oracle pays a directional penalty fee (up to a configurable max); a swap that corrects the pool back toward the oracle pays less. This needed Uniswap v4's per-swap dynamic-fee override — a static-fee pool can't do this at all.
 2. **`afterSwap`** — checks whether the swap just opened a real arbitrage gap against a reference pool. If it did, the hook executes the arbitrage itself, in a separate gas-capped call whose result is never checked — a failed or unprofitable attempt just returns, and the original swap goes through exactly as if the hook weren't there. There's nothing left over for an external bot to pick up in the next block.
 
-The dynamic-fee pool created by this hook is still quotable through Uniswap's own, unmodified `V4Quoter` — see `test/homelanderUniV4PluginChainlinkPmm.dynamicFee.test.ts`, the `"can be quoted through the official V4Quoter"` test.
-
 ## Partner integrations
 
 **Chainlink** — the directional fee curve reads price data through Chainlink's standard `AggregatorV3Interface` (`contracts/HomelanderUniV4PluginChainlinkPmm.sol`, `ChainlinkPmmConfig.token0UsdFeed` / `token1UsdFeed`). This means it works against any real Chainlink feed out of the box (e.g. the real Sepolia ETH/USD feed at `0x694AA1769357215DE4FAC081bf1f309aDC325306`). For the live demo specifically, the deploy wizard instead points each pool at its own `MockV3Aggregator` (Chainlink's own official mock contract, from `@chainlink/contracts`) so the fee curve can be shown reacting live to a manual price push, rather than waiting on a real feed's slower update cadence.
