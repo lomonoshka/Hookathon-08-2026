@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+/* Every component in this app (dashboard, deploy wizard, mainnet stats) is built with dark-theme
+   Tailwind classes — text-neutral-100/300/400/500, border-neutral-800, bg-neutral-900, etc. —
+   assuming a dark page background. This app always renders dark, regardless of the visitor's OS
+   light/dark preference; without a fixed background, a light-mode browser left the whole page
+   white while all that light-gray text (and dark, explicitly-backgrounded boxes like inputs and
+   buttons) stayed as-is, making most of the UI washed out or unreadable. */
+:root {
+  --background: #0b0a0e;
+  --foreground: #ededed;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-league-gothic);
+}
+
+/* Same dark/glass/monochrome-with-one-blue-bloom look as the main MEV-X brand system
+   (BRAND_BOOK.md §1/§4) — charcoal-to-black gradient, one restrained blue bloom top-right, a
+   faint white highlight top-left, full-bleed vignette. Fixed (not scroll-repeating) so it reads
+   as one continuous backdrop behind every page, not a per-viewport tile. */
+body {
+  color: var(--foreground);
+  font-family: var(--font-inter), Arial, Helvetica, sans-serif;
+  background-color: var(--background);
+  background-image:
+    radial-gradient(1500px 760px at 104% -10%, rgba(40, 78, 205, 0.32), transparent 52%),
+    radial-gradient(1100px 560px at 6% -16%, rgba(206, 212, 228, 0.08), transparent 58%),
+    radial-gradient(1400px 1000px at 40% 50%, transparent 58%, rgba(0, 0, 0, 0.42)),
+    linear-gradient(150deg, #221f28 0%, #17151b 52%, #0b0a0e 100%);
+  background-attachment: fixed;
+  background-size: cover;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-league-gothic), Arial, Helvetica, sans-serif;
+  letter-spacing: 0.3px;
+}
+
+/* Glass panel — same tokens as BRAND_BOOK.md §4/§7 (glass panel / stat box), reused here as the
+   one shared card treatment instead of the flat bg-neutral-900/border-neutral-800 boxes every
+   dashboard/wizard section used before. */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1.5px solid rgba(255, 255, 255, 0.13);
+  border-radius: 20px;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Uppercase, letter-spaced label style (BRAND_BOOK.md §3 "standard label") — for section kickers
+   and stat labels, in place of a plain text-xs text-neutral-500. */
+.label-caps {
+  font-family: var(--font-inter), Arial, Helvetica, sans-serif;
+  font-weight: 600;
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(185, 176, 204, 0.7);
+}
+
+/* Large League Gothic numerals (BRAND_BOOK.md §3/§7 ".num") — for the dashboard's biggest,
+   headline-worthy stats (swap counts, captured amounts), not every small figure. */
+.stat-number {
+  font-family: var(--font-league-gothic), Arial, Helvetica, sans-serif;
+  line-height: 0.9;
+  letter-spacing: 0.3px;
+  color: #fff;
+}

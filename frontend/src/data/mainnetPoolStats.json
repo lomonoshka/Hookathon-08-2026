@@ -1,0 +1,81 @@
+{
+  "generatedAtIso": "2026-09-01T21:25:21.749Z",
+  "chain": {
+    "id": 8453,
+    "name": "Base"
+  },
+  "pools": [
+    {
+      "poolId": "0x862c1adf56ba8fa642e57d2565733c0c005827946e300875d9decb836b3fafbc",
+      "poolManager": "0x498581fF718922c3f8e6A244956aF099B2652b2b",
+      "hooks": "0xcc05a232b1ff40427a4bd50a19e2255ae0fa10c0",
+      "hooksKind": "HomelanderPluginV4Factory beacon-proxy (per-pool plugin instance)",
+      "currency0": {
+        "address": "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42",
+        "symbol": "EURC",
+        "decimals": 6
+      },
+      "currency1": {
+        "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "symbol": "USDC",
+        "decimals": 6
+      },
+      "dynamicFee": true,
+      "tickSpacing": 60,
+      "scan": {
+        "fromBlock": "47100738",
+        "toBlock": "50754027",
+        "rpcUrl": "https://mainnet.base.org"
+      },
+      "stats": {
+        "swapCount": 2989,
+        "totalVolume0": 146230.121324,
+        "totalVolume1": 167543.760284,
+        "observedFeePips": [
+          100,
+          0
+        ],
+        "capturedValueUsd": 12.72,
+        "firstSwapIso": "2026-06-09T08:37:41.000Z",
+        "lastSwapIso": "2026-07-03T07:48:23.000Z"
+      },
+      "weeklyBuckets": [
+        {
+          "weekStartTs": 1780531200,
+          "weekStartIso": "2026-06-04",
+          "swapCount": 194,
+          "volume0": 10118.7599,
+          "volume1": 11686.124869
+        },
+        {
+          "weekStartTs": 1781136000,
+          "weekStartIso": "2026-06-11",
+          "swapCount": 807,
+          "volume0": 33784.033034,
+          "volume1": 39081.445348
+        },
+        {
+          "weekStartTs": 1781740800,
+          "weekStartIso": "2026-06-18",
+          "swapCount": 915,
+          "volume0": 44984.405802,
+          "volume1": 51389.457723
+        },
+        {
+          "weekStartTs": 1782345600,
+          "weekStartIso": "2026-06-25",
+          "swapCount": 879,
+          "volume0": 47866.533112,
+          "volume1": 54554.901818
+        },
+        {
+          "weekStartTs": 1782950400,
+          "weekStartIso": "2026-07-02",
+          "swapCount": 194,
+          "volume0": 9476.389476,
+          "volume1": 10831.830526
+        }
+      ]
+    }
+  ]
+}

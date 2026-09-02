@@ -27,6 +27,16 @@ export const defaultNetworks = {
 		url: node_url("monad_testnet"),
 		chainId: 10143,
 	},
+	sepolia: {
+		tags: ["testnet"],
+		url: node_url("sepolia"),
+		chainId: 11155111,
+		verify: {
+			etherscan: {
+				apiKey: env.ETHSCAN_API_KEY,
+			},
+		},
+	},
 	monad_mainnet: {
 		tags: ["mainnet"],
 		url: node_url("monad_mainnet"),

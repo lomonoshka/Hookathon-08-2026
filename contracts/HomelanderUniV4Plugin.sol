@@ -13,6 +13,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 import {Constants} from "./Constants.sol";
 import {IMevxExecutor} from "./interfaces/IMevxExecutor.sol";
@@ -35,12 +36,35 @@ contract HomelanderUniV4Plugin is BaseHook, Ownable2Step {
 	uint256 public constant MAX_MIN_GAS_LEFT = 2_500_000;
 	uint256 public constant MAX_CALL_GAS_BUDGET = 5_000_000;
 
+	/// @dev Chainlink Data Feed used to gauge realized volatility for dynamic fee tiering.
+	/// When unset (address(0)), beforeSwap falls back to the static `defaultFeePips` behavior.
+	AggregatorV3Interface public priceFeed;
+	int256 public lastObservedPrice;
+	uint256 public volatilityScore;
+
+	uint24 public lowVolFeePips;
+	uint24 public highVolFeePips;
+	uint256 public lowVolThreshold;
+	uint256 public highVolThreshold;
+
+	/// @dev EWMA smoothing window (in swaps) for `volatilityScore`, and the basis-point denominator
+	/// used to express per-swap price moves.
+	uint256 public constant VOLATILITY_SMOOTHING = 10;
+	uint256 public constant BPS_DENOM = 10_000;
+
 	event ConfigIdSet(bytes32 oldConfigId, bytes32 newConfigId);
 	event ProfitDistributorSet(address oldProfitDistributor, address newProfitDistributor);
 	event MevxExecutorSet(address oldMevxExecutor, address newMevxExecutor);
 	event MevxRouterSet(address oldMevxRouter, address newMevxRouter);
 	event MinGasLeftSet(uint256 oldMinGasLeft, uint256 newMinGasLeft);
 	event CallGasBudgetSet(uint256 oldCallGasBudget, uint256 newCallGasBudget);
+	event PriceFeedSet(address oldPriceFeed, address newPriceFeed);
+	event VolatilityFeeTiersSet(
+		uint24 lowVolFeePips,
+		uint24 highVolFeePips,
+		uint256 lowVolThreshold,
+		uint256 highVolThreshold
+	);
 
 	constructor(
 		IPoolManager _poolManager,
@@ -138,6 +162,32 @@ contract HomelanderUniV4Plugin is BaseHook, Ownable2Step {
 		revert("Ownership cannot be renounced");
 	}
 
+	function setPriceFeed(AggregatorV3Interface _priceFeed) external onlyOwner {
+		address oldPriceFeed = address(priceFeed);
+		priceFeed = _priceFeed;
+		lastObservedPrice = 0;
+		volatilityScore = 0;
+		emit PriceFeedSet(oldPriceFeed, address(_priceFeed));
+	}
+
+	function setVolatilityFeeTiers(
+		uint24 _lowVolFeePips,
+		uint24 _highVolFeePips,
+		uint256 _lowVolThreshold,
+		uint256 _highVolThreshold
+	) external onlyOwner {
+		require(_lowVolFeePips <= LPFeeLibrary.MAX_LP_FEE, "lowVolFeePips too high");
+		require(_highVolFeePips <= LPFeeLibrary.MAX_LP_FEE, "highVolFeePips too high");
+		require(_lowVolThreshold < _highVolThreshold, "thresholds out of order");
+
+		lowVolFeePips = _lowVolFeePips;
+		highVolFeePips = _highVolFeePips;
+		lowVolThreshold = _lowVolThreshold;
+		highVolThreshold = _highVolThreshold;
+
+		emit VolatilityFeeTiersSet(_lowVolFeePips, _highVolFeePips, _lowVolThreshold, _highVolThreshold);
+	}
+
 	// ──────────────────── Hooks ────────────────────
 
 	function _beforeSwap(
@@ -152,13 +202,61 @@ contract HomelanderUniV4Plugin is BaseHook, Ownable2Step {
 		}
 
 		uint24 defaultFeePips = dynamicFee & 0x7FFFFF;
-		uint24 feeToUse = sender == address(mevxExecutor) ? 0 : defaultFeePips;
+		uint24 feeToUse = _feeForSender(sender, defaultFeePips);
 
 		return (
 			BaseHook.beforeSwap.selector,
 			BeforeSwapDeltaLibrary.ZERO_DELTA,
 			LPFeeLibrary.OVERRIDE_FEE_FLAG | feeToUse
 		);
+	}
+
+	/// @dev The internal executor always trades at 0 fee. Everyone else pays `defaultFeePips`,
+	/// unless a Chainlink price feed is configured, in which case the fee is tiered off of
+	/// `volatilityScore` (see `_updateVolatility`).
+	function _feeForSender(address sender, uint24 defaultFeePips) internal view returns (uint24) {
+		if (sender == address(mevxExecutor)) {
+			return 0;
+		}
+
+		if (address(priceFeed) == address(0)) {
+			return defaultFeePips;
+		}
+
+		if (volatilityScore >= highVolThreshold) {
+			return highVolFeePips;
+		}
+
+		if (volatilityScore <= lowVolThreshold) {
+			return lowVolFeePips;
+		}
+
+		return defaultFeePips;
+	}
+
+	/// @dev Pulls the latest Chainlink price and folds the observed move (in bps) into an EWMA
+	/// stored in `volatilityScore`. Never reverts the swap: a stale/misbehaving feed just means
+	/// the fee tier doesn't update this swap.
+	function _updateVolatility() internal {
+		if (address(priceFeed) == address(0)) {
+			return;
+		}
+
+		try priceFeed.latestRoundData() returns (uint80, int256 answer, uint256, uint256 updatedAt, uint80) {
+			if (answer <= 0 || updatedAt == 0) {
+				return;
+			}
+
+			if (lastObservedPrice != 0) {
+				uint256 diff = answer > lastObservedPrice
+					? uint256(answer - lastObservedPrice)
+					: uint256(lastObservedPrice - answer);
+				uint256 moveBps = (diff * BPS_DENOM) / uint256(lastObservedPrice);
+				volatilityScore = (volatilityScore * (VOLATILITY_SMOOTHING - 1) + moveBps) / VOLATILITY_SMOOTHING;
+			}
+
+			lastObservedPrice = answer;
+		} catch {}
 	}
 
 	function _afterInitialize(address, PoolKey calldata key, uint160, int24) internal override returns (bytes4) {
@@ -189,6 +287,8 @@ contract HomelanderUniV4Plugin is BaseHook, Ownable2Step {
 		if (sender != address(mevxExecutor)) {
 			require(gasleft() >= minGasLeft, "Insufficient gas for afterSwap hook");
 		}
+
+		_updateVolatility();
 
 		bytes32 poolId = PoolId.unwrap(key.toId());
 
