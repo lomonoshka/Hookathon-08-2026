@@ -14,6 +14,8 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {Constants} from "./Constants.sol";
 import {IMevxExecutor} from "./interfaces/IMevxExecutor.sol";
@@ -21,6 +23,8 @@ import {IMevxRouter} from "./interfaces/IMevxRouter.sol";
 import {IProfitDistributor} from "./interfaces/IProfitDistributor.sol";
 
 contract HomelanderUniV4Plugin is BaseHook, Ownable2Step {
+	using SafeERC20 for IERC20;
+
 	/// @dev Uniswap v4 dynamic-fee sentinel + default LP fee (fee pips).
 	/// Encoding: `dynamicFee = 0x800000 | defaultFeePips`.
 	uint24 public immutable dynamicFee;
@@ -33,8 +37,17 @@ contract HomelanderUniV4Plugin is BaseHook, Ownable2Step {
 	uint256 public minGasLeft;
 	uint256 public callGasBudget;
 
+	/// @dev Share of arbitrage profit donated back to the pool's in-range LPs, in bps.
+	uint256 public defaultLpShareBps;
+	/// @dev poolId => lpShareBps + 1; 0 means "use defaultLpShareBps".
+	mapping(bytes32 => uint256) public lpShareBpsOverride;
+
+	/// @dev Recorded at afterInitialize; donate needs the full key, not just the id.
+	mapping(bytes32 => PoolKey) internal _poolKeys;
+
 	uint256 public constant MAX_MIN_GAS_LEFT = 2_500_000;
 	uint256 public constant MAX_CALL_GAS_BUDGET = 5_000_000;
+	uint256 public constant BPS_DENOMINATOR = 10_000;
 
 	/// @dev Chainlink Data Feed used to gauge realized volatility for dynamic fee tiering.
 	/// When unset (address(0)), beforeSwap falls back to the static `defaultFeePips` behavior.
@@ -65,6 +78,9 @@ contract HomelanderUniV4Plugin is BaseHook, Ownable2Step {
 		uint256 lowVolThreshold,
 		uint256 highVolThreshold
 	);
+	event DefaultLpShareBpsSet(uint256 oldBps, uint256 newBps);
+	event LpShareBpsOverrideSet(bytes32 indexed poolId, uint256 oldBpsPlusOne, uint256 newBpsPlusOne);
+	event ProfitShared(bytes32 indexed poolId, address profitToken, uint256 donatedToLps, uint256 sentToDistributor);
 
 	constructor(
 		IPoolManager _poolManager,
@@ -94,6 +110,8 @@ contract HomelanderUniV4Plugin is BaseHook, Ownable2Step {
 		dynamicFee = dynamicFee_;
 		callGasBudget = MAX_CALL_GAS_BUDGET;
 	}
+
+	receive() external payable {}
 
 	function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
 		return
@@ -158,6 +176,19 @@ contract HomelanderUniV4Plugin is BaseHook, Ownable2Step {
 		emit CallGasBudgetSet(oldCallGasBudget, callGasBudget_);
 	}
 
+	function setDefaultLpShareBps(uint256 bps) external onlyOwner {
+		require(bps <= BPS_DENOMINATOR, "lp share too high");
+		emit DefaultLpShareBpsSet(defaultLpShareBps, bps);
+		defaultLpShareBps = bps;
+	}
+
+	/// @param bpsPlusOne 0 clears the override; otherwise the effective share is bpsPlusOne - 1.
+	function setLpShareBpsOverride(bytes32 poolId, uint256 bpsPlusOne) external onlyOwner {
+		require(bpsPlusOne <= BPS_DENOMINATOR + 1, "lp share too high");
+		emit LpShareBpsOverrideSet(poolId, lpShareBpsOverride[poolId], bpsPlusOne);
+		lpShareBpsOverride[poolId] = bpsPlusOne;
+	}
+
 	function renounceOwnership() public view override onlyOwner {
 		revert("Ownership cannot be renounced");
 	}
@@ -186,6 +217,17 @@ contract HomelanderUniV4Plugin is BaseHook, Ownable2Step {
 		highVolThreshold = _highVolThreshold;
 
 		emit VolatilityFeeTiersSet(_lowVolFeePips, _highVolFeePips, _lowVolThreshold, _highVolThreshold);
+	}
+
+	// ──────────────────── Views ────────────────────
+
+	function getLpShareBps(bytes32 poolId) public view returns (uint256) {
+		uint256 stored = lpShareBpsOverride[poolId];
+		return stored == 0 ? defaultLpShareBps : stored - 1;
+	}
+
+	function poolKeys(bytes32 poolId) external view returns (PoolKey memory) {
+		return _poolKeys[poolId];
 	}
 
 	// ──────────────────── Hooks ────────────────────
@@ -261,6 +303,8 @@ contract HomelanderUniV4Plugin is BaseHook, Ownable2Step {
 
 	function _afterInitialize(address, PoolKey calldata key, uint160, int24) internal override returns (bytes4) {
 		bytes32 poolId = PoolId.unwrap(key.toId());
+		_poolKeys[poolId] = key;
+
 		bytes memory data = abi.encodePacked(
 			Currency.unwrap(key.currency0),
 			Currency.unwrap(key.currency1),
@@ -350,19 +394,83 @@ contract HomelanderUniV4Plugin is BaseHook, Ownable2Step {
 		bytes memory encodedRoute;
 
 		(bool success, bytes memory returnData) = address(mevxRouter).call(callData);
-		if (success && returnData.length >= 224) {
-			(isArbPossible, profitToken, pools, amountIn, encodedRoute) = abi.decode(
-				returnData,
-				(bool, address, address[], uint256, bytes)
-			);
+		// A failed call must not leave isArbPossible set from the initialArbCheck above,
+		// or an empty route would be handed to the executor.
+		if (!success || returnData.length < 224) {
+			return;
+		}
+		(isArbPossible, profitToken, pools, amountIn, encodedRoute) = abi.decode(
+			returnData,
+			(bool, address, address[], uint256, bytes)
+		);
+
+		if (!isArbPossible) {
+			return;
 		}
 
-		IProfitDistributor profitDistributor_ = profitDistributor;
-
-		if (isArbPossible) {
-			try mevxExecutor.executeRoute(encodedRoute, pools, amountIn, profitToken, address(profitDistributor_)) {
-				try profitDistributor_.distributeProfit(configId, profitToken, sender) {} catch {}
-			} catch {}
+		// Profit is taken onto the plugin so the LP share can be split off before the
+		// remainder reaches the distributor.
+		uint256 balanceBefore = _selfBalance(profitToken);
+		try mevxExecutor.executeRoute(encodedRoute, pools, amountIn, profitToken, address(this)) {} catch {
+			return;
 		}
+
+		uint256 profit = _selfBalance(profitToken) - balanceBefore;
+		if (profit == 0) {
+			return;
+		}
+
+		uint256 lpAmount = (profit * getLpShareBps(poolId)) / BPS_DENOMINATOR;
+		uint256 donated = lpAmount == 0 ? 0 : _donateToPool(poolId, profitToken, lpAmount);
+
+		uint256 rest = profit - donated;
+		if (rest > 0) {
+			IProfitDistributor profitDistributor_ = profitDistributor;
+			if (profitToken == address(0)) {
+				(bool sent, ) = address(profitDistributor_).call{value: rest}("");
+				require(sent, "native transfer failed");
+			} else {
+				IERC20(profitToken).safeTransfer(address(profitDistributor_), rest);
+			}
+			try profitDistributor_.distributeProfit(configId, profitToken, sender) {} catch {}
+		}
+
+		emit ProfitShared(poolId, profitToken, donated, rest);
+	}
+
+	/// @dev Returns the amount actually donated: `amount` on success, 0 when the profit token
+	/// is not a pool currency or the donate/settle sequence fails (e.g. no in-range liquidity).
+	function _donateToPool(bytes32 poolId, address profitToken, uint256 amount) internal returns (uint256) {
+		PoolKey memory key = _poolKeys[poolId];
+		bool isCurrency0 = Currency.unwrap(key.currency0) == profitToken;
+		if (!isCurrency0 && Currency.unwrap(key.currency1) != profitToken) {
+			return 0;
+		}
+		try this.donateAndSettle(key, isCurrency0 ? amount : 0, isCurrency0 ? 0 : amount) {
+			return amount;
+		} catch {
+			return 0;
+		}
+	}
+
+	/// @dev Must run inside the PoolManager unlock context (it does: runArbitrage executes
+	/// within the triggering swap). External only to be try/catch-able via a self-call.
+	function donateAndSettle(PoolKey calldata key, uint256 amount0, uint256 amount1) external {
+		require(msg.sender == address(this), "self only");
+		poolManager.donate(key, amount0, amount1, "");
+
+		Currency currency = amount0 > 0 ? key.currency0 : key.currency1;
+		uint256 amount = amount0 > 0 ? amount0 : amount1;
+		if (currency.isAddressZero()) {
+			poolManager.settle{value: amount}();
+		} else {
+			poolManager.sync(currency);
+			IERC20(Currency.unwrap(currency)).safeTransfer(address(poolManager), amount);
+			require(poolManager.settle() == amount, "settle mismatch");
+		}
+	}
+
+	function _selfBalance(address token) internal view returns (uint256) {
+		return token == address(0) ? address(this).balance : IERC20(token).balanceOf(address(this));
 	}
 }

@@ -1,5 +1,8 @@
 import { ethers } from 'ethers';
 
+// Arachnid CREATE2 deployer, the canonical deterministic-deployment proxy.
+export const CREATE2_DEPLOYER = '0x4e59b44847b379578588920ca78fbf26c0b4956c';
+
 // Matches Hooks.ALL_HOOK_MASK — the lower 14 bits of the hook address encode permissions.
 export const HOOK_FLAG_MASK = 0x3fffn;
 

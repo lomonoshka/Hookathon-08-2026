@@ -9,7 +9,7 @@ export const defaultNetworks = {
 		allowUnlimitedContractSize: true,
 	},
 	localhost: {
-		url: "127.0.0.1",
+		url: "http://127.0.0.1:8545",
 		tags: ["local"]
 	},
 	bsc_mainnet: {

@@ -101,7 +101,8 @@
     "files:find": "find . -name",
     "search:code": "grep -r --exclude-dir=node_modules",
     "clean:artifacts": "rm -rf dist build *.log",
-    "stats:project": "echo \"JS Files: $(npm run maintain:files --silent) | Commits: $(git rev-list --count HEAD 2>/dev/null || echo '0') | Branch: $(git branch --show-current)\""
+    "stats:project": "echo \"JS Files: $(npm run maintain:files --silent) | Commits: $(git rev-list --count HEAD 2>/dev/null || echo '0') | Branch: $(git branch --show-current)\"",
+    "test:fork:base": "./scripts/with-anvil.sh hardhat test test/base-fork/arbitrageDonate.base-fork.ts --network localhost"
   },
   "keywords": [],
   "author": "",

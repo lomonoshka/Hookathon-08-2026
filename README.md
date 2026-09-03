@@ -56,3 +56,21 @@ cd frontend
 npm install
 npm run dev
 ```
+
+## Base fork test
+
+`test/base-fork/arbitrageDonate.base-fork.ts` exercises the whole capture path against real Base
+mainnet state instead of mocks. It deploys the hook at a CREATE2-mined address, creates a native
+ETH/USDC pool, seeds it with 100k USDC and the matching amount of ETH, then swaps ETH in to open
+a gap against the Uniswap V3 WETH/USDC pool — and checks that the backrun fired and that the
+profit is withdrawable by an LP. Every swap in the transaction is logged, so the profit can be
+traced leg by leg. It runs against a local anvil fork (Foundry required) and needs no private
+keys; set `BASE_FORK_BLOCK_NUMBER` to pin the fork and make repeated runs fast.
+
+```bash
+cp .env.example .env    # set ETH_NODE_URI_BASE_MAINNET
+yarn test:fork:base
+```
+
+The hook only backruns pools the router has routes for, and routes are keyed by a poolId derived
+from the hook address — so they have to be uploaded for the exact plugin build under test.

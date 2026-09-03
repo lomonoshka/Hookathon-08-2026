@@ -18,6 +18,12 @@ import { task } from 'hardhat/config';
 
 const OPTIMIZER_RUNS = 1;
 
+// addForkConfiguration assigns `accounts` to every network from the ACCOUNTS env var. The local
+// anvil fork ships its own funded, unlocked accounts, so take those instead — that way running
+// the fork tests needs no private keys in .env at all.
+const forkNetworks = addForkConfiguration(defaultNetworks);
+(forkNetworks.localhost as { accounts?: unknown }).accounts = 'remote';
+
 const config: HardhatUserConfig = {
 	solidity: {
 		compilers: [
@@ -34,7 +40,7 @@ const config: HardhatUserConfig = {
 			},
 		],
 	},
-	networks: addForkConfiguration(defaultNetworks),
+	networks: forkNetworks,
 	gasReporter: {
 		currency: 'USD',
 		gasPrice: 100,
